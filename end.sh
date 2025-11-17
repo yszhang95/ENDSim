@@ -1,5 +1,5 @@
 #!/bin/bash
 
-export ENDDATA=/home/guang/work/END/ENDSim
-export PATH=/usr/local/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+export ENDDATA=/ratpac-setup/local/share/end
+export PATH=/ratpac-setup/local/bin:$PATH
+export LD_LIBRARY_PATH=/ratpac-setup/local/lib:$LD_LIBRARY_PATH

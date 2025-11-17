@@ -1,0 +1,8 @@
+**build/
+**install/
+**.root
+**.o
+**.a
+**.so
+**.log
+src/include/Config.hh

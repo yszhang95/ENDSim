@@ -4,8 +4,13 @@
 namespace END {
 End::End(RAT::AnyParse* parser, int argc, char** argv) : Rat(parser, argc, argv) {
   // Append an additional data directory (for ratdb and geo)
-  char* enddata = getenv("ENDDATA");
+  const char* enddata = getenv("ENDDATA");
   if (enddata != NULL) {
+    ratdb_directories.insert(static_cast<std::string>(enddata) + "/ratdb");
+    model_directories.insert(static_cast<std::string>(enddata) + "/models");
+  } else {
+    enddata = "/ratpac-setup/local/share/end";
+    setenv("ENDDATA", enddata, 1);
     ratdb_directories.insert(static_cast<std::string>(enddata) + "/ratdb");
     model_directories.insert(static_cast<std::string>(enddata) + "/models");
   }
