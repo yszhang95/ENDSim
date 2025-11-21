@@ -5,8 +5,14 @@
 # Initialize the run
 /run/initialize
 
+# waveform analysis
+/rat/proc forcedtrigger
+
+/rat/proc WaveformPrep
+/rat/procset voltage_threshold -0.01
+
 # Load the DAQ processor
-/rat/proc mydaq
+# /rat/proc mydaq
 
 # Set the output file
 /rat/proclast outntuple
