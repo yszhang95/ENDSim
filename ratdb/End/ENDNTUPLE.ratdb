@@ -1,0 +1,6 @@
+{
+  "name": "ENDNTUPLE",
+  "index": "end_ntuple",
+  "run_range": [0, 0],
+  "save_discrete_signal": true
+}

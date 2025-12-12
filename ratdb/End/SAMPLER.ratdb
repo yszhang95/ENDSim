@@ -1,0 +1,13 @@
+{
+"name" : "SAMPLER",
+"index" : "simple_sampler",
+"run_range" : [0, 0],
+
+"sampling_rate" : 1.0,
+"offset" : 0.,
+"volt_high" : 1000.,
+"volt_low" : -1000.,
+"noise_amplitude" : 0.,
+"nsamples" : 100,
+"termination_ohms" : 50.
+}

@@ -1,0 +1,17 @@
+{
+"name": "DIGITIZER_ANALYSIS",
+"index": "simpleanalyzer",
+"run_range": [0, 0],
+
+"voltage_threshold": -0.01,
+"pedestal_window_low": 0,
+"pedestal_window_high": 50,
+"lookback": 5.0,
+"integration_window_low": -20.0,
+"integration_window_high": 60.0,
+"constant_fraction": 0.2,
+"sliding_window_width": 20.0,
+"sliding_window_thresh": 0.0,
+"apply_cable_offset": 0,
+"zero_suppress": 0
+}

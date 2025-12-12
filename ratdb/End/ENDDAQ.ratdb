@@ -1,0 +1,7 @@
+{
+"name": "ENDDAQ",
+"index": "endforcedtrigger",
+"run_range" : [0, 0],
+"sampler_name" : "simple_sampler",
+"sample_waveforms" : true
+}

@@ -1,5 +1,5 @@
-#include <End.hh>
-#include "MyDAQProc.hh"
+#include "End.hh"
+#include "END/ForcedTriggerProc.hh"
 
 namespace END {
 End::End(RAT::AnyParse* parser, int argc, char** argv) : Rat(parser, argc, argv) {
@@ -9,7 +9,7 @@ End::End(RAT::AnyParse* parser, int argc, char** argv) : Rat(parser, argc, argv)
     ratdb_directories.insert(static_cast<std::string>(enddata) + "/ratdb");
     model_directories.insert(static_cast<std::string>(enddata) + "/models");
   } else {
-    enddata = "/ratpac-setup/local/share/end";
+    enddata = "/ratpac-setup/ENDSim/install";
     setenv("ENDDATA", enddata, 1);
     ratdb_directories.insert(static_cast<std::string>(enddata) + "/ratdb");
     model_directories.insert(static_cast<std::string>(enddata) + "/models");
@@ -22,6 +22,7 @@ End::End(RAT::AnyParse* parser, int argc, char** argv) : Rat(parser, argc, argv)
 #endif
   RAT::ProcBlockManager::AppendProcessor<NtupleProc>();
   RAT::ProcBlockManager::AppendProcessor<END::MyDAQProc>();
+  RAT::ProcBlockManager::AppendProcessor<END::ForcedTriggerProc>();
   // Include a new type of processor
   // Add a unique component to the datastructure
   // Register generators

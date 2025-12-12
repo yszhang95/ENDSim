@@ -19,8 +19,15 @@ class NtupleProc : public RAT::OutNtupleProc {
   void FillEvent(RAT::DS::Root*, RAT::DS::EV*) override;
   void FillNoTriggerEvent(RAT::DS::Root*) override;
   void FillMeta() override;
+  void EndOfRun(RAT::DS::Run*) override;
 
- protected:
+protected:
+  TTree *dwfTree;
+  int dwf_pmtid;
+  std::vector<Double_t> dwf_inWindowPulseTimes;
+  std::vector<Double_t> dwf_inWindowPulseCharges;
+  std::vector<Float_t> dwf_waveform;
+
   double geo_index;
   std::string geo_file;
   std::string experiment;
@@ -30,6 +37,8 @@ class NtupleProc : public RAT::OutNtupleProc {
   double source_rot_x;
   double source_rot_y;
   double source_rot_z;
+
+  bool fSaveDiscreteSignal;
 };
 
 }  // namespace END

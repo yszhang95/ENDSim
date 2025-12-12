@@ -6,6 +6,7 @@ add_library( END SHARED
   NtupleProc.cc
   LaserballGenerator.cc
   MyDAQProc.cc
+  ForcedTriggerProc.cc
 )
 
 target_include_directories( END PUBLIC

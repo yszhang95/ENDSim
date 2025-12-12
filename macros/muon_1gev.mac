@@ -1,21 +1,22 @@
 # Set the detector
 /rat/db/set DETECTOR experiment "End"
 /rat/db/set DETECTOR geo_file "End/END.geo"
+/rat/db/load End/SAMPLER.ratdb
+/rat/db/load End/ENDDAQ.ratdb
+/rat/db/load End/ENDDIGITIZER_ANALYSIS.ratdb
+/rat/db/load End/ENDNTUPLE.ratdb
+/rat/db/load End/ENDPMTPULSE.ratdb
 
 # Initialize the run
 /run/initialize
 
-# waveform analysis
-/rat/proc forcedtrigger
-
+# DAQ and waveform analysis
+/rat/proc endforcedtrigger
 /rat/proc WaveformPrep
-/rat/procset voltage_threshold -0.01
-
-# Load the DAQ processor
-# /rat/proc mydaq
+/rat/procset analyzer_name "simpleanalyzer"
 
 # Set the output file
-/rat/proclast outntuple
+/rat/proclast endntuple
 /rat/procset file "muon_1gev_output.root"
 
 /generator/add combo gun:point:poisson
@@ -23,5 +24,5 @@
 /generator/vtx/set mu- 0 0 1 1000
 /generator/pos/set 0 0 0
 
-# Run 100 events
-/run/beamOn 10
+# Run 10 events
+/run/beamOn 5

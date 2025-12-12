@@ -19,9 +19,12 @@ Use vis.mac as an example.
 ## Usage of docker image
 Taking `podman` as an example,
 ```shell
-# under the root directory of this repository
+# under the parent directory of this repository
 # user 0 --> root user in podman; does not use it when you use `docker`
-podman run -it --rm -v ./:/ratpac-setup/ENDSim --user 0 -w /ratpac-setup/ENDSim docker.io/ratpac/ratpac-two
+# ratpac-two is downloaded from your folk of rat-pac/ratpac-two, e.g., yszhang95/ratpac-two
+podman run -it --rm -v ./ENDSim/:/ratpac-setup/ENDSim -v ./ratpac-two/:/ratpac-setup/ratpac --user 0 -w /ratpac-setup/ENDSim docker.io/ratpac/ratpac-two
+# or a persistent container with -d, without --rm
+# podman run -it -d -v ./ENDSim/:/ratpac-setup/ENDSim -v ./ratpac-two/:/ratpac-setup/ratpac --user 0 -w /ratpac-setup/ENDSim --name endsim docker.io/ratpac/ratpac-two
 ```
 After running inside the container, compile under the following way,
 ```shell
