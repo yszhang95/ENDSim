@@ -21,7 +21,6 @@ End::End(RAT::AnyParse* parser, int argc, char** argv) : Rat(parser, argc, argv)
   RAT::ProcBlockManager::AppendProcessor<HitmanProc>();
 #endif
   RAT::ProcBlockManager::AppendProcessor<NtupleProc>();
-  RAT::ProcBlockManager::AppendProcessor<END::MyDAQProc>();
   RAT::ProcBlockManager::AppendProcessor<END::ForcedTriggerProc>();
   // Include a new type of processor
   // Add a unique component to the datastructure
