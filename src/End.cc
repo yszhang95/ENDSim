@@ -9,7 +9,7 @@ End::End(RAT::AnyParse* parser, int argc, char** argv) : Rat(parser, argc, argv)
     ratdb_directories.insert(static_cast<std::string>(enddata) + "/ratdb");
     model_directories.insert(static_cast<std::string>(enddata) + "/models");
   } else {
-    enddata = "/ratpac-setup/ENDSim/install";
+    enddata = "/ratpac-setup/ENDSim/install/share/end";
     setenv("ENDDATA", enddata, 1);
     ratdb_directories.insert(static_cast<std::string>(enddata) + "/ratdb");
     model_directories.insert(static_cast<std::string>(enddata) + "/models");
