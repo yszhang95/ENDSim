@@ -1,0 +1,31 @@
+# Set the detector
+/rat/db/set DETECTOR experiment "End"
+/rat/db/set DETECTOR geo_file "End/END.geo"
+/rat/db/load End/ENDDAQ.ratdb
+/rat/db/load End/ENDNTUPLE.ratdb
+/rat/db/set IO[NtupleProc] include_frame_info true
+/rat/db/set IO[NtupleProc] include_frame_ambient true
+
+
+# Initialize the run
+/run/initialize
+
+# DAQ and waveform analysis
+/rat/proc streamingdaq
+/rat/proc streamingframe
+/rat/procset frame_window_length_ms 100.0
+
+/rat/proc ambientlight
+/rat/procset rate 70.0
+
+/rat/proclast endntuple
+/rat/procset file "muon_1gev_frame_output.root"
+
+
+/generator/add combo gun:point:poisson
+# Generate a 1 GeV muon at (0,0,0) along +z
+/generator/vtx/set mu- 0 0 1 1000
+/generator/pos/set 0 0 0
+
+# Run 10 events
+/run/beamOn 5

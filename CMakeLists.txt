@@ -88,7 +88,7 @@ configure_file(${CMAKE_SOURCE_DIR}/config/Config.hh.in
 
 # Configure local scripts
 set(ENDROOT ${CMAKE_INSTALL_PREFIX})
-set(ENDSHARE ${CMAKE_INSTALL_PREFIX})
+set(ENDSHARE ${CMAKE_INSTALL_PREFIX}/share/end)
 configure_file(${CMAKE_SOURCE_DIR}/config/end.sh.in
   ${PROJECT_SOURCE_DIR}/end.sh
   @ONLY NEWLINE_STYLE UNIX)
