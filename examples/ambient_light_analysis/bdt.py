@@ -1,3 +1,4 @@
+import argparse
 import numpy as np
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
@@ -47,8 +48,96 @@ def area(surface):
 cosmic_rates = {conf: 1.5*area(cosmic_surface[conf]) for conf in cosmic_surface}
 cosmic_rate = cosmic_rates["aframe_spacing5m_hex_DU_v2"]
 
-fsignal = ROOT.TFile("bdtinput_signal_aframe_spacing5m_hex_DU_v2.root", "read")
-fbkg = ROOT.TFile("bdtinput_bkg_aframe_spacing5m_hex_DU_v2.root", "read")
+# ---- Argument parsing -------------------------------------------------------
+parser = argparse.ArgumentParser(description="Train BDT on streaming ROOT data")
+parser.add_argument('--signal_root', required=True,
+                    help='Path to signal ROOT file (output of pmt_bdt.cc)')
+parser.add_argument('--bkg_root', required=True,
+                    help='Path to background ROOT file (output of pmt_bdt.cc)')
+parser.add_argument('--n_signal', type=int, required=True,
+                    help='Max number of signal events to load')
+parser.add_argument('--n_bkg', type=int, required=True,
+                    help='Max number of background events to load')
+parser.add_argument('--scale_pos_weight', type=float, default=None,
+                    help='XGBoost scale_pos_weight (default: n_bkg/n_signal)')
+parser.add_argument('--max_len', type=int, default=88,
+                    help='Number of DOM slots per event (padding length, default: 88)')
+args = parser.parse_args()
+
+# ---- Streaming data loader --------------------------------------------------
+def stream_events_from_root(root_file, max_events, max_len=88):
+    """
+    Read up to max_events complete events from the 'doms' TTree in root_file.
+    Streams row-by-row without loading the whole tree into memory.
+
+    Returns
+    -------
+    X    : np.float32 array, shape (n_events, n_feat_cols * max_len)
+    info : np.float32 array, shape (n_events, 8)
+           columns: [rock_wgt, vtxX, vtxY, vtxZ, momX, momY, momZ, muE]
+    """
+    INFO_COLS = ['rock_wgt', 'vtxX', 'vtxY', 'vtxZ', 'momX', 'momY', 'momZ', 'muE']
+
+    f = ROOT.TFile(root_file, "read")
+    tree = f.Get("doms")
+
+    # Preserve branch ordering so feature indices stay consistent with feature_vecsize
+    all_branches = [b.GetName() for b in tree.GetListOfBranches()]
+    feat_cols = [c for c in all_branches if c != 'event_id' and c not in INFO_COLS]
+
+    X_list = []
+    info_list = []
+
+    cur_eid = None
+    cur_feat = {c: [] for c in feat_cols}
+    cur_info = {c: [] for c in INFO_COLS}
+
+    def flush():
+        info_row = [float(np.mean(cur_info[c])) for c in INFO_COLS]
+        feat_parts = []
+        for c in feat_cols:
+            vals = cur_feat[c]
+            if len(vals) >= max_len:
+                vals = vals[:max_len]
+            else:
+                vals = vals + [-1.0] * (max_len - len(vals))
+            feat_parts.append(vals)
+        x = np.array(feat_parts, dtype=np.float32).flatten()
+        return x, info_row
+
+    for entry in tree:
+        eid = int(entry.event_id)
+        if cur_eid is None:
+            cur_eid = eid
+
+        if eid != cur_eid:
+            x, info = flush()
+            X_list.append(x)
+            info_list.append(info)
+            if len(X_list) >= max_events:
+                break
+            cur_eid = eid
+            cur_feat = {c: [] for c in feat_cols}
+            cur_info = {c: [] for c in INFO_COLS}
+
+        for c in feat_cols:
+            cur_feat[c].append(float(getattr(entry, c)))
+        for c in INFO_COLS:
+            cur_info[c].append(float(getattr(entry, c)))
+    else:
+        # Tree exhausted before reaching max_events — flush the last buffered event
+        if cur_eid is not None and len(X_list) < max_events:
+            x, info = flush()
+            X_list.append(x)
+            info_list.append(info)
+
+    f.Close()
+    print(f"Loaded {len(X_list)} events from {root_file}")
+    return np.array(X_list, dtype=np.float32), np.array(info_list, dtype=np.float32)
+
+# ---- Normalization ROOT files -----------------------------------------------
+fsignal = ROOT.TFile(args.signal_root, "read")
+fbkg = ROOT.TFile(args.bkg_root, "read")
 tot_signal = fsignal.Get("nevts").Integral()
 tot_bkg = fbkg.Get("nevts").Integral()
 
@@ -67,15 +156,12 @@ print("Normalization Factors : ", norm_signal, norm_bkg)
 
 outfolder = "/home/nitish/public_html/shared/end/efficiency/domPE/bdt_aframe_spacing5m_hex_DU_v2/3dom_3pe_50/"
 
-# Load dataset
-X_signal = np.load('signal_aframe_spacing5m_hex_DU_v2.npy')
-X_bkg = np.load('bkg_aframe_spacing5m_hex_DU_v2.npy')
+# Load dataset by streaming from ROOT files
+X_signal, df_signal = stream_events_from_root(args.signal_root, args.n_signal, args.max_len)
+X_bkg, df_bkg = stream_events_from_root(args.bkg_root, args.n_bkg, args.max_len)
 X_signal[np.isinf(X_signal)] = -5
 X_bkg[np.isinf(X_bkg)] = -5
 
-# aux info
-df_signal = pd.read_csv('signal_aframe_spacing5m_hex_DU_v2_info.csv').to_numpy()
-df_bkg = pd.read_csv('bkg_aframe_spacing5m_hex_DU_v2_info.csv').to_numpy()
 X_info = np.vstack([df_signal, df_bkg])
 signal_eff_corr = tot_signal/(df_signal[:,0].sum())
 bkg_eff_corr = tot_bkg/(df_bkg[:,0].sum())
@@ -117,6 +203,13 @@ dtest = xgb.DMatrix(X, label=y)
 y_test = y
 info_test = X_info
 
+# Compute scale_pos_weight
+if args.scale_pos_weight is not None:
+    scale_pos_weight = args.scale_pos_weight
+else:
+    scale_pos_weight = len(y_bkg) / max(len(y_signal), 1)
+print("scale_pos_weight : ", scale_pos_weight)
+
 # XGBoost parameters
 params = {
     'objective': 'binary:logistic',
@@ -127,7 +220,7 @@ params = {
     'subsample': 0.8,
     'colsample_bytree': 0.8,
     'seed': 30,
-    'scale_pos_weight': 3
+    'scale_pos_weight': scale_pos_weight
 }
 
 # Train with early stopping on validation set
