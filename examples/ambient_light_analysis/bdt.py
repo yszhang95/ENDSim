@@ -62,27 +62,40 @@ parser.add_argument('--scale_pos_weight', type=float, default=None,
                     help='XGBoost scale_pos_weight (default: n_bkg/n_signal)')
 parser.add_argument('--max_len', type=int, default=88,
                     help='Number of DOM slots per event (padding length, default: 88)')
+parser.add_argument('--exclude_branches', nargs='*', default=[],
+                    help='Branch names to exclude from training features (e.g. --exclude_branches dom_x dom_y)')
 args = parser.parse_args()
 
 # ---- Streaming data loader --------------------------------------------------
-def stream_events_from_root(root_file, max_events, max_len=88):
+def stream_events_from_root(root_file, max_events, max_len=88, exclude_branches=None):
     """
     Load the full 'doms' TTree via RDataFrame, group all rows by event_id,
     then return the first max_events grouped events.
 
+    Parameters
+    ----------
+    exclude_branches : list of str, optional
+        Branch names to drop from the feature matrix.
+
     Returns
     -------
-    X    : np.float32 array, shape (n_events, n_feat_cols * max_len)
-    info : np.float32 array, shape (n_events, 8)
-           columns: [rock_wgt, vtxX, vtxY, vtxZ, momX, momY, momZ, muE]
+    X         : np.float32 array, shape (n_events, n_feat_cols * max_len)
+    info      : np.float32 array, shape (n_events, 8)
+                columns: [rock_wgt, vtxX, vtxY, vtxZ, momX, momY, momZ, muE]
+    feat_cols : list of str — the ordered feature branches actually used
     """
     INFO_COLS = ['rock_wgt', 'vtxX', 'vtxY', 'vtxZ', 'momX', 'momY', 'momZ', 'muE']
+    if exclude_branches is None:
+        exclude_branches = []
 
     rdf = ROOT.RDataFrame("doms", root_file)
     df = pd.DataFrame(rdf.AsNumpy())
 
     # Preserve branch ordering so feature indices stay consistent with feature_vecsize
-    feat_cols = [c for c in df.columns if c != 'event_id' and c not in INFO_COLS]
+    feat_cols = [c for c in df.columns
+                 if c != 'event_id' and c not in INFO_COLS and c not in exclude_branches]
+    if exclude_branches:
+        print(f"Excluding branches: {exclude_branches}")
     colagg = {c: list for c in feat_cols}
     colagg.update({c: 'mean' for c in INFO_COLS})
 
@@ -100,8 +113,8 @@ def stream_events_from_root(root_file, max_events, max_len=88):
     X = np.hstack([np.array(df[c].tolist()) for c in feat_cols]).astype(np.float32)
     info = df[INFO_COLS].to_numpy(dtype=np.float32)
 
-    print(f"Loaded {len(df)} events from {root_file}")
-    return X, info
+    print(f"Loaded {len(df)} events from {root_file} ({len(feat_cols)} feature branches x {max_len} slots = {len(feat_cols)*max_len} features)")
+    return X, info, feat_cols
 
 # ---- Normalization ROOT files -----------------------------------------------
 fsignal = ROOT.TFile(args.signal_root, "read")
@@ -125,8 +138,8 @@ print("Normalization Factors : ", norm_signal, norm_bkg)
 outfolder = "/home/nitish/public_html/shared/end/efficiency/domPE/bdt_aframe_spacing5m_hex_DU_v2/3dom_3pe_50/"
 
 # Load dataset by streaming from ROOT files
-X_signal, df_signal = stream_events_from_root(args.signal_root, args.n_signal, args.max_len)
-X_bkg, df_bkg = stream_events_from_root(args.bkg_root, args.n_bkg, args.max_len)
+X_signal, df_signal, feat_cols = stream_events_from_root(args.signal_root, args.n_signal, args.max_len, args.exclude_branches)
+X_bkg,    df_bkg,    _         = stream_events_from_root(args.bkg_root,    args.n_bkg,    args.max_len, args.exclude_branches)
 X_signal[np.isinf(X_signal)] = -5
 X_bkg[np.isinf(X_bkg)] = -5
 
@@ -207,14 +220,17 @@ print("Time Taken for Training (s) : ", time.time()-start)
 # Save model for later inference
 bst.save_model('xgb_model_aframe_spacing5m_hex_DU_v2.json')
 
-def apply_trigger(X):
+def apply_trigger(X, trigger_branch, feat_cols, max_len):
     #  # older tree
     #  ndoms_pecut = np.sum(X[:, 3*feature_vecsize:4*feature_vecsize] >= 3, axis=1)
     #  # newer tree, 100ns for pe
     #  ndoms_pecut = np.sum(X[:, 6*feature_vecsize:7*feature_vecsize] >= 3, axis=1)
-    # newer tree, 50ns for pe
-    ndoms_pecut = np.sum(X[:, 7*feature_vecsize:8*feature_vecsize] >= 3, axis=1)
-    return np.where(ndoms_pecut >=3)
+    # newer tree, 50ns for pe — use dynamic index in case branches were excluded
+    if trigger_branch not in feat_cols:
+        raise ValueError(f"Trigger branch '{trigger_branch}' was excluded; cannot apply trigger.")
+    idx = feat_cols.index(trigger_branch)
+    ndoms_pecut = np.sum(X[:, idx*max_len:(idx+1)*max_len] >= 3, axis=1)
+    return np.where(ndoms_pecut >= 3)
 
 # Evaluate on the test set
 y_pred_prob = bst.predict(dtest)
@@ -273,7 +289,7 @@ plt.colorbar(hist1[3], ax=ax1)
 plt.colorbar(hist2[3], ax=ax2)
 plt.savefig(outfolder+'bdt_energycorr.pdf')
 
-trigger_cut = apply_trigger(X)
+trigger_cut = apply_trigger(X, 'npe_50', feat_cols, args.max_len)
 y_pred_prob = y_pred_prob[trigger_cut]
 info_test = info_test[trigger_cut]
 y_test = y_test[trigger_cut]
