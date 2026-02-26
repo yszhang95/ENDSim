@@ -230,11 +230,27 @@ else:
     bkg_eff_corr    = tot_bkg    / info_val_bkg[:,0].sum()
     del X_val_sig, X_val_bkg, info_val_sig, info_val_bkg
 
-    # Training batch ranges (events after the validation slice)
+    # Split: 20% val | 60% train | 20% test
+    n_test_sig = max(1, int(n_sig * 0.2))
+    n_test_bkg = max(1, int(n_bkg * 0.2))
+    n_train_end_sig = n_sig - n_test_sig
+    n_train_end_bkg = n_bkg - n_test_bkg
+    train_row_end_sig = (int(sig_first_rows[n_train_end_sig])
+                         if n_train_end_sig < len(sig_first_rows) else sig_last_row)
+    train_row_end_bkg = (int(bkg_first_rows[n_train_end_bkg])
+                         if n_train_end_bkg < len(bkg_first_rows) else bkg_last_row)
+
+    # Training batch ranges (middle 60%)
     sig_train_ranges = make_batch_ranges(
-        sig_first_rows[n_val_sig:], sig_last_row, args.batch_size)
+        sig_first_rows[n_val_sig:n_train_end_sig], train_row_end_sig, args.batch_size)
     bkg_train_ranges = make_batch_ranges(
-        bkg_first_rows[n_val_bkg:], bkg_last_row, args.batch_size)
+        bkg_first_rows[n_val_bkg:n_train_end_bkg], train_row_end_bkg, args.batch_size)
+
+    # Test batch ranges (last 20%, held out from training)
+    sig_test_ranges = make_batch_ranges(
+        sig_first_rows[n_train_end_sig:], sig_last_row, args.batch_size)
+    bkg_test_ranges = make_batch_ranges(
+        bkg_first_rows[n_train_end_bkg:], bkg_last_row, args.batch_size)
 
     # scale_pos_weight proxy from event counts
     if args.scale_pos_weight is None:
@@ -243,27 +259,39 @@ else:
         scale_pos_weight = args.scale_pos_weight
 
     print(f"Batch mode: {n_sig} signal / {n_bkg} bkg events, "
-          f"{len(sig_train_ranges)} sig train batches, {len(bkg_train_ranges)} bkg train batches")
+          f"{len(sig_train_ranges)} train batches, {len(sig_test_ranges)} test batches")
 
 signal_evtrate_factor = 1.
 bkg_evtrate_factor = 1.
 
+def apply_trigger(X, trigger_branch, feat_cols, max_len):
+    #  # older tree
+    #  ndoms_pecut = np.sum(X[:, 3*feature_vecsize:4*feature_vecsize] >= 3, axis=1)
+    #  # newer tree, 100ns for pe
+    #  ndoms_pecut = np.sum(X[:, 6*feature_vecsize:7*feature_vecsize] >= 3, axis=1)
+    # newer tree, 50ns for pe — use dynamic index in case branches were excluded
+    if trigger_branch not in feat_cols:
+        raise ValueError(f"Trigger branch '{trigger_branch}' was excluded; cannot apply trigger.")
+    idx = feat_cols.index(trigger_branch)
+    ndoms_pecut = np.sum(X[:, idx*max_len:(idx+1)*max_len] >= 3, axis=1)
+    return np.where(ndoms_pecut >= 3)
+
 if args.batch_size is None:
     # Split: 60% train, 20% validation, 20% test
     X_train, X_temp, y_train, y_temp, info_train, info_temp = train_test_split(
-        X, y, X_info, test_size=0.2, stratify=y, random_state=42
+        X, y, X_info, test_size=0.4, stratify=y, random_state=42
     )
     X_val, X_test, y_val, y_test, info_val, info_test = train_test_split(
         X_temp, y_temp, info_temp, test_size=0.5, stratify=y_temp, random_state=43
     )
+    del X, X_info  # full arrays no longer needed
 
     # Create DMatrix objects
     dtrain = xgb.DMatrix(X_train, label=y_train)
     dval   = xgb.DMatrix(X_val,   label=y_val)
-    # For stats predict on full set
-    dtest  = xgb.DMatrix(X, label=y)
-    y_test    = y
-    info_test = X_info
+    dtest  = xgb.DMatrix(X_test,  label=y_test)
+    trigger_cut_nb = apply_trigger(X_test, 'npe_50', feat_cols, args.max_len)
+    del X_train, X_val, X_test
 
     # Compute scale_pos_weight
     if args.scale_pos_weight is not None:
@@ -342,26 +370,11 @@ else:
 # Save model for later inference
 bst.save_model('xgb_model_aframe_spacing5m_hex_DU_v2.json')
 
-def apply_trigger(X, trigger_branch, feat_cols, max_len):
-    #  # older tree
-    #  ndoms_pecut = np.sum(X[:, 3*feature_vecsize:4*feature_vecsize] >= 3, axis=1)
-    #  # newer tree, 100ns for pe
-    #  ndoms_pecut = np.sum(X[:, 6*feature_vecsize:7*feature_vecsize] >= 3, axis=1)
-    # newer tree, 50ns for pe — use dynamic index in case branches were excluded
-    if trigger_branch not in feat_cols:
-        raise ValueError(f"Trigger branch '{trigger_branch}' was excluded; cannot apply trigger.")
-    idx = feat_cols.index(trigger_branch)
-    ndoms_pecut = np.sum(X[:, idx*max_len:(idx+1)*max_len] >= 3, axis=1)
-    return np.where(ndoms_pecut >= 3)
-
 # Evaluate on the test set
 if args.batch_size is None:
     y_pred_prob = bst.predict(dtest)
 else:
-    # Full prediction ranges cover all requested events for each class
-    sig_all_ranges = make_batch_ranges(sig_first_rows, sig_last_row, args.batch_size)
-    bkg_all_ranges = make_batch_ranges(bkg_first_rows, bkg_last_row, args.batch_size)
-
+    # Predict only on the held-out test set (last 20%)
     trigger_col_idx = feat_cols.index('npe_50')
 
     all_pred, all_y, all_info, all_trig = [], [], [], []
@@ -381,8 +394,8 @@ else:
             all_info.append(info_b)
             del X_b, info_b
 
-    _predict_loop(args.signal_root, sig_all_ranges, 1)
-    _predict_loop(args.bkg_root,    bkg_all_ranges, 0)
+    _predict_loop(args.signal_root, sig_test_ranges, 1)
+    _predict_loop(args.bkg_root,    bkg_test_ranges, 0)
 
     y_pred_prob  = np.concatenate(all_pred)
     y_test       = np.concatenate(all_y)
@@ -450,7 +463,7 @@ plt.colorbar(hist2[3], ax=ax2)
 plt.savefig(outfolder+'bdt_energycorr.pdf')
 
 if args.batch_size is None:
-    trigger_cut = apply_trigger(X, 'npe_50', feat_cols, args.max_len)
+    trigger_cut = trigger_cut_nb
 else:
     trigger_cut = np.where(trigger_mask)
 y_pred_prob = y_pred_prob[trigger_cut]
