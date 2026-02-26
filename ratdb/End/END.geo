@@ -65,7 +65,7 @@ start_idx: 0, //idx of the first pmt
 //pmt_model: "r14374",
 //pmt_model: "r11065",
   //pmt_model: "r12199",
-  pmt_model: "test_lognormal",
+pmt_model: "r12199m",
 mu_metal: 0,
 mu_metal_material: "aluminum",
 mu_metal_surface: "aluminum",
