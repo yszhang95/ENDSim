@@ -115,6 +115,9 @@ void process(const std::string& infilename,
 
     int   event_id, dom_id, du_id;
     float dom_x, dom_y, dom_z;
+    float vtxX, vtxY, vtxZ;
+    float momX, momY, momZ;
+    float muE, rock_wgt;
     int   npmts, npe, pe_min, pe_spread, pe_max;
     int   npmts_50, npmts_100, npe_50, npe_100;
     float pe_mean, pe_rms;
@@ -123,6 +126,14 @@ void process(const std::string& infilename,
     tout->Branch("event_id",   &event_id,   "event_id/I");
     tout->Branch("dom_id",     &dom_id,     "dom_id/I");
     tout->Branch("du_id",      &du_id,      "du_id/I");
+    tout->Branch("vtxX",       &vtxX,       "vtxX/F");
+    tout->Branch("vtxY",       &vtxY,       "vtxY/F");
+    tout->Branch("vtxZ",       &vtxZ,       "vtxZ/F");
+    tout->Branch("momX",       &momX,       "momX/F");
+    tout->Branch("momY",       &momY,       "momY/F");
+    tout->Branch("momZ",       &momZ,       "momZ/F");
+    tout->Branch("muE",        &muE,        "muE/F");
+    tout->Branch("rock_wgt",   &rock_wgt,   "rock_wgt/F");
     tout->Branch("dom_x",      &dom_x,      "dom_x/F");
     tout->Branch("dom_y",      &dom_y,      "dom_y/F");
     tout->Branch("dom_z",      &dom_z,      "dom_z/F");
@@ -139,6 +150,12 @@ void process(const std::string& infilename,
     tout->Branch("npe_50",     &npe_50,     "npe_50/I");
     tout->Branch("npmts_100",  &npmts_100,  "npmts_100/I");
     tout->Branch("npe_100",    &npe_100,    "npe_100/I");
+
+    // Fake truth variables — not available for ambient background
+    vtxX = vtxY = vtxZ = -9999.f;
+    momX = momY = momZ = -9999.f;
+    muE      = -9999.f;
+    rock_wgt = 1.f;
 
     // ------------------------------------------------------------------
     // M-iteration loop
