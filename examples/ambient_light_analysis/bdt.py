@@ -67,8 +67,8 @@ args = parser.parse_args()
 # ---- Streaming data loader --------------------------------------------------
 def stream_events_from_root(root_file, max_events, max_len=88):
     """
-    Read up to max_events complete events from the 'doms' TTree in root_file.
-    Streams row-by-row without loading the whole tree into memory.
+    Load the full 'doms' TTree via RDataFrame, group all rows by event_id,
+    then return the first max_events grouped events.
 
     Returns
     -------
@@ -78,62 +78,30 @@ def stream_events_from_root(root_file, max_events, max_len=88):
     """
     INFO_COLS = ['rock_wgt', 'vtxX', 'vtxY', 'vtxZ', 'momX', 'momY', 'momZ', 'muE']
 
-    f = ROOT.TFile(root_file, "read")
-    tree = f.Get("doms")
+    rdf = ROOT.RDataFrame("doms", root_file)
+    df = pd.DataFrame(rdf.AsNumpy())
 
     # Preserve branch ordering so feature indices stay consistent with feature_vecsize
-    all_branches = [b.GetName() for b in tree.GetListOfBranches()]
-    feat_cols = [c for c in all_branches if c != 'event_id' and c not in INFO_COLS]
+    feat_cols = [c for c in df.columns if c != 'event_id' and c not in INFO_COLS]
+    colagg = {c: list for c in feat_cols}
+    colagg.update({c: 'mean' for c in INFO_COLS})
 
-    X_list = []
-    info_list = []
+    df = df.groupby('event_id').agg(colagg).reset_index().iloc[:max_events]
 
-    cur_eid = None
-    cur_feat = {c: [] for c in feat_cols}
-    cur_info = {c: [] for c in INFO_COLS}
+    if len(df) < max_events:
+        print(f"Warning: only {len(df)} complete events found (requested {max_events}). "
+              "Use a larger file.")
 
-    def flush():
-        info_row = [float(np.mean(cur_info[c])) for c in INFO_COLS]
-        feat_parts = []
-        for c in feat_cols:
-            vals = cur_feat[c]
-            if len(vals) >= max_len:
-                vals = vals[:max_len]
-            else:
-                vals = vals + [-1.0] * (max_len - len(vals))
-            feat_parts.append(vals)
-        x = np.array(feat_parts, dtype=np.float32).flatten()
-        return x, info_row
+    for c in feat_cols:
+        df[c] = df[c].apply(
+            lambda l: l[:max_len] if len(l) >= max_len else l + [-1.0] * (max_len - len(l))
+        )
 
-    for entry in tree:
-        eid = int(entry.event_id)
-        if cur_eid is None:
-            cur_eid = eid
+    X = np.hstack([np.array(df[c].tolist()) for c in feat_cols]).astype(np.float32)
+    info = df[INFO_COLS].to_numpy(dtype=np.float32)
 
-        if eid != cur_eid:
-            x, info = flush()
-            X_list.append(x)
-            info_list.append(info)
-            if len(X_list) >= max_events:
-                break
-            cur_eid = eid
-            cur_feat = {c: [] for c in feat_cols}
-            cur_info = {c: [] for c in INFO_COLS}
-
-        for c in feat_cols:
-            cur_feat[c].append(float(getattr(entry, c)))
-        for c in INFO_COLS:
-            cur_info[c].append(float(getattr(entry, c)))
-    else:
-        # Tree exhausted before reaching max_events — flush the last buffered event
-        if cur_eid is not None and len(X_list) < max_events:
-            x, info = flush()
-            X_list.append(x)
-            info_list.append(info)
-
-    f.Close()
-    print(f"Loaded {len(X_list)} events from {root_file}")
-    return np.array(X_list, dtype=np.float32), np.array(info_list, dtype=np.float32)
+    print(f"Loaded {len(df)} events from {root_file}")
+    return X, info
 
 # ---- Normalization ROOT files -----------------------------------------------
 fsignal = ROOT.TFile(args.signal_root, "read")
