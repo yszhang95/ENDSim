@@ -32,7 +32,7 @@ def mass(V, conf="long"):
     else:
         return (V[0][1] - V[0][0])*(V[2][1] - V[2][0])*((V[1][1] - (V[1][0]+10))*997. + (10)*2700.)/1.E6
 
-frates = ROOT.TFile("/home/nitish/public_html/shared/uboone/flugg_study/for_milind/plots_pretty/data/event_rates_lp3_depth_numu.root", "read")
+frates = ROOT.TFile("/work/ENDSim/data/event_rates_lp3_depth_numu.root", "read") # I am inside docker ubuntu2404-cvmfs.
 rate_perPOT_perKT = frates.Get("h_numu_lp3_me").Integral()/10.
 rate_perPOT = rate_perPOT_perKT*mass(fvs["aframe_spacing5m_hex_DU_v2"], "aframe_spacing5m_hex_DU_v2")
 
@@ -156,7 +156,10 @@ def stream_events_from_root(root_file, max_events, max_len=88, exclude_branches=
 fsignal = ROOT.TFile(args.signal_root, "read")
 fbkg = ROOT.TFile(args.bkg_root, "read")
 tot_signal = fsignal.Get("nevts").Integral()
-tot_bkg = fbkg.Get("nevts").Integral()
+# tot_bkg = fbkg.Get("nevts").Integral()
+# FIXME: I use the slot for cosmic to represent ambient light.
+# FIXME: tot_bkg is 10 times larger than tot_signal for training?
+tot_bkg = 10 * tot_signal
 
 # now try to normalize everything to per Day
 pot = tot_signal/rate_perPOT
@@ -164,14 +167,18 @@ osc_factor = 0.73
 pot_perDay = 7.92E-3
 norm_signal = osc_factor*pot_perDay/pot
 
-livetime = tot_bkg/cosmic_rate
-spill_rate = 0.937 # Hz
-spill_length = 1.E-5 # 10us
-norm_bkg = 86400*spill_rate*spill_length/livetime
+# livetime = tot_bkg/cosmic_rate
+# spill_rate = 0.937 # Hz
+# spill_length = 1.E-5 # 10us
+# norm_bkg = 86400*spill_rate*spill_length/livetime
+
+# FIXME: I use the slot for cosmic to represent ambient light
+# FIXME: ambient light is 30 ms / 30us = 1000 times more than beam rate
+norm_bkg = 1000*norm_signal/osc_factor
 
 print("Normalization Factors : ", norm_signal, norm_bkg)
 
-outfolder = "/home/nitish/public_html/shared/end/efficiency/domPE/bdt_aframe_spacing5m_hex_DU_v2/3dom_3pe_50/"
+outfolder = "end/efficiency/domPE/bdt_aframe_spacing5m_hex_DU_v2/3dom_3pe_50/"
 
 # Load dataset by streaming from ROOT files
 if args.batch_size is None:
