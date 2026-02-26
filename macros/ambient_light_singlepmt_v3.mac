@@ -1,0 +1,34 @@
+# Streaming frame ambient light test
+/rat/db/set DETECTOR experiment "End"
+/rat/db/set DETECTOR geo_file "End/END.geo"
+/rat/db/load End/ENDNTUPLE.ratdb
+/rat/db/set GEO[km3net_doms] pmt_model "r12199m"
+/rat/db/set ENDNTUPLE save_discrete_signal false
+/rat/db/set GEO[km3net_doms] start_idx  0
+/rat/db/set GEO[km3net_doms] end_idx  1
+
+/rat/db/set IO[NtupleProc] include_frame_info true
+/rat/db/set IO[NtupleProc] include_frame_ambient true
+
+
+/rat/proc streamingdaq
+/rat/proc streamingframe
+/rat/procset frame_window_length_ms 0.05
+
+/rat/proc ambientlight
+/rat/procset rate 7000.0
+
+/rat/proclast outntuple
+/rat/procset include_mchits 0
+/rat/procset include_digitizerhits 0
+/rat/procset include_pmthits 0
+/rat/procset file "output_ambient_light_50us.root"
+
+/generator/add combo pbomb:point:poisson
+/generator/pos/set 0.0 0.0 0.0
+/generator/vtx/set 0 400      # 0 photons, 400nm wavelength
+/generator/rate/set 1.0       # Poisson rate to keep time generator valid
+
+# Dummy generator (0 photons) to satisfy Geant4
+/run/initialize
+/run/beamOn 5000000
