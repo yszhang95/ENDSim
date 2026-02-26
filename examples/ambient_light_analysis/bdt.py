@@ -64,18 +64,76 @@ parser.add_argument('--max_len', type=int, default=88,
                     help='Number of DOM slots per event (padding length, default: 88)')
 parser.add_argument('--exclude_branches', nargs='*', default=[],
                     help='Branch names to exclude from training features (e.g. --exclude_branches dom_x dom_y)')
+parser.add_argument('--batch_size', type=int, default=None,
+    help='Events per mini-batch. None = load everything at once (default).')
 args = parser.parse_args()
 
-# ---- Streaming data loader --------------------------------------------------
+# ---- Streaming data loaders -------------------------------------------------
+
+def get_event_row_boundaries(root_file):
+    """
+    Returns
+    -------
+    first_rows : int64 array, shape (n_unique_events,)
+        Sorted row index of the first DOM row for each unique event.
+    total_rows : int
+    """
+    rdf = ROOT.RDataFrame("doms", root_file)
+    event_ids = np.array(rdf.AsNumpy(["event_id"])["event_id"])
+    _, first_rows = np.unique(event_ids, return_index=True)
+    return np.sort(first_rows), len(event_ids)
+
+
+def load_event_batch(root_file, row_start, row_end,
+                     max_len=88, exclude_branches=None):
+    """
+    Load a row-slice [row_start, row_end) from the 'doms' TTree, group by
+    event_id, pad/flatten to a fixed-width feature matrix.
+
+    Returns
+    -------
+    X         : np.float32 array, shape (n_events, n_feat_cols * max_len)
+    info      : np.float32 array, shape (n_events, 8)
+    feat_cols : list of str
+    """
+    INFO_COLS = ['rock_wgt', 'vtxX', 'vtxY', 'vtxZ', 'momX', 'momY', 'momZ', 'muE']
+    if exclude_branches is None:
+        exclude_branches = []
+
+    rdf = ROOT.RDataFrame("doms", root_file).Range(int(row_start), int(row_end))
+    df  = pd.DataFrame(rdf.AsNumpy())
+
+    feat_cols = [c for c in df.columns
+                 if c != 'event_id' and c not in INFO_COLS
+                 and c not in exclude_branches]
+    colagg = {c: list for c in feat_cols}
+    colagg.update({c: 'mean' for c in INFO_COLS})
+    df = df.groupby('event_id').agg(colagg).reset_index()
+
+    for c in feat_cols:
+        df[c] = df[c].apply(
+            lambda l: l[:max_len] if len(l) >= max_len
+                      else l + [-1.0] * (max_len - len(l))
+        )
+    X    = np.hstack([np.array(df[c].tolist()) for c in feat_cols]).astype(np.float32)
+    info = df[INFO_COLS].to_numpy(dtype=np.float32)
+    return X, info, feat_cols
+
+
+def make_batch_ranges(first_rows, last_row, batch_size):
+    """Return list of (row_start, row_end) covering first_rows in chunks."""
+    ranges = []
+    n = len(first_rows)
+    for i in range(0, n, batch_size):
+        r_start = first_rows[i]
+        r_end   = first_rows[i + batch_size] if (i + batch_size) < n else last_row
+        ranges.append((int(r_start), int(r_end)))
+    return ranges
+
+
 def stream_events_from_root(root_file, max_events, max_len=88, exclude_branches=None):
     """
-    Load the full 'doms' TTree via RDataFrame, group all rows by event_id,
-    then return the first max_events grouped events.
-
-    Parameters
-    ----------
-    exclude_branches : list of str, optional
-        Branch names to drop from the feature matrix.
+    Thin wrapper around load_event_batch for backward-compatible full loads.
 
     Returns
     -------
@@ -84,37 +142,15 @@ def stream_events_from_root(root_file, max_events, max_len=88, exclude_branches=
                 columns: [rock_wgt, vtxX, vtxY, vtxZ, momX, momY, momZ, muE]
     feat_cols : list of str — the ordered feature branches actually used
     """
-    INFO_COLS = ['rock_wgt', 'vtxX', 'vtxY', 'vtxZ', 'momX', 'momY', 'momZ', 'muE']
-    if exclude_branches is None:
-        exclude_branches = []
-
-    rdf = ROOT.RDataFrame("doms", root_file)
-    df = pd.DataFrame(rdf.AsNumpy())
-
-    # Preserve branch ordering so feature indices stay consistent with feature_vecsize
-    feat_cols = [c for c in df.columns
-                 if c != 'event_id' and c not in INFO_COLS and c not in exclude_branches]
-    if exclude_branches:
-        print(f"Excluding branches: {exclude_branches}")
-    colagg = {c: list for c in feat_cols}
-    colagg.update({c: 'mean' for c in INFO_COLS})
-
-    df = df.groupby('event_id').agg(colagg).reset_index().iloc[:max_events]
-
-    if len(df) < max_events:
-        print(f"Warning: only {len(df)} complete events found (requested {max_events}). "
-              "Use a larger file.")
-
-    for c in feat_cols:
-        df[c] = df[c].apply(
-            lambda l: l[:max_len] if len(l) >= max_len else l + [-1.0] * (max_len - len(l))
-        )
-
-    X = np.hstack([np.array(df[c].tolist()) for c in feat_cols]).astype(np.float32)
-    info = df[INFO_COLS].to_numpy(dtype=np.float32)
-
-    print(f"Loaded {len(df)} events from {root_file} ({len(feat_cols)} feature branches x {max_len} slots = {len(feat_cols)*max_len} features)")
-    return X, info, feat_cols
+    first_rows, total_rows = get_event_row_boundaries(root_file)
+    n = min(max_events, len(first_rows))
+    row_end = int(first_rows[n]) if n < len(first_rows) else total_rows
+    X, info, feat_cols = load_event_batch(root_file, 0, row_end, max_len, exclude_branches)
+    if len(X) < max_events:
+        print(f"Warning: only {len(X)} events found (requested {max_events}).")
+    print(f"Loaded {len(X)} events from {root_file} "
+          f"({len(feat_cols)} feat cols x {max_len} slots = {len(feat_cols)*max_len} features)")
+    return X[:max_events], info[:max_events], feat_cols
 
 # ---- Normalization ROOT files -----------------------------------------------
 fsignal = ROOT.TFile(args.signal_root, "read")
@@ -138,57 +174,107 @@ print("Normalization Factors : ", norm_signal, norm_bkg)
 outfolder = "/home/nitish/public_html/shared/end/efficiency/domPE/bdt_aframe_spacing5m_hex_DU_v2/3dom_3pe_50/"
 
 # Load dataset by streaming from ROOT files
-X_signal, df_signal, feat_cols = stream_events_from_root(args.signal_root, args.n_signal, args.max_len, args.exclude_branches)
-X_bkg,    df_bkg,    _         = stream_events_from_root(args.bkg_root,    args.n_bkg,    args.max_len, args.exclude_branches)
-X_signal[np.isinf(X_signal)] = -5
-X_bkg[np.isinf(X_bkg)] = -5
+if args.batch_size is None:
+    X_signal, df_signal, feat_cols = stream_events_from_root(args.signal_root, args.n_signal, args.max_len, args.exclude_branches)
+    X_bkg,    df_bkg,    _         = stream_events_from_root(args.bkg_root,    args.n_bkg,    args.max_len, args.exclude_branches)
+    X_signal[np.isinf(X_signal)] = -5
+    X_bkg[np.isinf(X_bkg)] = -5
 
-X_info = np.vstack([df_signal, df_bkg])
-signal_eff_corr = tot_signal/(df_signal[:,0].sum())
-bkg_eff_corr = tot_bkg/(df_bkg[:,0].sum())
-print("No Activity Efficiency Correction : ", signal_eff_corr, bkg_eff_corr)
-del df_signal, df_bkg
+    X_info = np.vstack([df_signal, df_bkg])
+    signal_eff_corr = tot_signal/(df_signal[:,0].sum())
+    bkg_eff_corr = tot_bkg/(df_bkg[:,0].sum())
+    print("No Activity Efficiency Correction : ", signal_eff_corr, bkg_eff_corr)
+    del df_signal, df_bkg
 
-# Build label vectors
-y_signal = np.ones(len(X_signal),  dtype=int)
-y_bkg = np.zeros(len(X_bkg), dtype=int)
-print("Signal vs Background Statistics : ", len(y_signal), len(y_bkg))
+    # Build label vectors
+    y_signal = np.ones(len(X_signal),  dtype=int)
+    y_bkg = np.zeros(len(X_bkg), dtype=int)
+    print("Signal vs Background Statistics : ", len(y_signal), len(y_bkg))
 
-# Stack together
-X = np.vstack([X_signal, X_bkg])              # shape (n_signal + n_bkg, L * n_cols)
-y = np.concatenate([y_signal, y_bkg])         # shape (n_signal + n_bkg,)
-del X_signal, X_bkg
+    # Stack together
+    X = np.vstack([X_signal, X_bkg])
+    y = np.concatenate([y_signal, y_bkg])
+    del X_signal, X_bkg
+else:
+    sig_first_rows, sig_total_rows = get_event_row_boundaries(args.signal_root)
+    bkg_first_rows, bkg_total_rows = get_event_row_boundaries(args.bkg_root)
 
-# Split: 60% train, 20% validation, 20% test
-X_train, X_temp, y_train, y_temp, info_train, info_temp = train_test_split(
-    X, y, X_info, test_size=0.2, stratify=y, random_state=42
-)
-X_val, X_test, y_val, y_test, info_val, info_test = train_test_split(
-    X_temp, y_temp, info_temp, test_size=0.5, stratify=y_temp, random_state=43
-)
+    # Limit to requested event count; compute the exclusive end row carefully
+    n_sig = min(args.n_signal, len(sig_first_rows))
+    n_bkg = min(args.n_bkg,    len(bkg_first_rows))
+    sig_last_row = (int(sig_first_rows[n_sig]) if n_sig < len(sig_first_rows) else sig_total_rows)
+    bkg_last_row = (int(bkg_first_rows[n_bkg]) if n_bkg < len(bkg_first_rows) else bkg_total_rows)
+    sig_first_rows = sig_first_rows[:n_sig]
+    bkg_first_rows = bkg_first_rows[:n_bkg]
 
-#  signal_evtrate_factor = X_info[:,0][y == 1].sum()/info_test[:,0][y_test == 1].sum()
-#  bkg_evtrate_factor = X_info[:,0][y == 0].sum()/info_test[:,0][y_test == 0].sum()
-#  print("Test vs Total Factors : ", signal_evtrate_factor, bkg_evtrate_factor)
+    # Validation set (first 20% of each class, loaded once)
+    n_val_sig = max(1, int(n_sig * 0.2))
+    n_val_bkg = max(1, int(n_bkg * 0.2))
+
+    val_row_end_sig = (int(sig_first_rows[n_val_sig])
+                       if n_val_sig < len(sig_first_rows) else sig_last_row)
+    val_row_end_bkg = (int(bkg_first_rows[n_val_bkg])
+                       if n_val_bkg < len(bkg_first_rows) else bkg_last_row)
+
+    X_val_sig, info_val_sig, feat_cols = load_event_batch(
+        args.signal_root, 0, val_row_end_sig, args.max_len, args.exclude_branches)
+    X_val_bkg, info_val_bkg, _         = load_event_batch(
+        args.bkg_root,    0, val_row_end_bkg, args.max_len, args.exclude_branches)
+    X_val_sig[np.isinf(X_val_sig)] = -5
+    X_val_bkg[np.isinf(X_val_bkg)] = -5
+
+    X_val  = np.vstack([X_val_sig, X_val_bkg])
+    y_val  = np.concatenate([np.ones(len(X_val_sig), dtype=int),
+                              np.zeros(len(X_val_bkg), dtype=int)])
+    signal_eff_corr = tot_signal / info_val_sig[:,0].sum()
+    bkg_eff_corr    = tot_bkg    / info_val_bkg[:,0].sum()
+    del X_val_sig, X_val_bkg, info_val_sig, info_val_bkg
+
+    # Training batch ranges (events after the validation slice)
+    sig_train_ranges = make_batch_ranges(
+        sig_first_rows[n_val_sig:], sig_last_row, args.batch_size)
+    bkg_train_ranges = make_batch_ranges(
+        bkg_first_rows[n_val_bkg:], bkg_last_row, args.batch_size)
+
+    # scale_pos_weight proxy from event counts
+    if args.scale_pos_weight is None:
+        scale_pos_weight = n_bkg / max(n_sig, 1)
+    else:
+        scale_pos_weight = args.scale_pos_weight
+
+    print(f"Batch mode: {n_sig} signal / {n_bkg} bkg events, "
+          f"{len(sig_train_ranges)} sig train batches, {len(bkg_train_ranges)} bkg train batches")
+
 signal_evtrate_factor = 1.
 bkg_evtrate_factor = 1.
 
+if args.batch_size is None:
+    # Split: 60% train, 20% validation, 20% test
+    X_train, X_temp, y_train, y_temp, info_train, info_temp = train_test_split(
+        X, y, X_info, test_size=0.2, stratify=y, random_state=42
+    )
+    X_val, X_test, y_val, y_test, info_val, info_test = train_test_split(
+        X_temp, y_temp, info_temp, test_size=0.5, stratify=y_temp, random_state=43
+    )
 
-# Create DMatrix objects
-dtrain = xgb.DMatrix(X_train, label=y_train)
-dval = xgb.DMatrix(X_val, label=y_val)
-#  dtest = xgb.DMatrix(X_test, label=y_test)
-# For stats predict on full set
-# we've checked performance is not too different from training and test
-dtest = xgb.DMatrix(X, label=y)
-y_test = y
-info_test = X_info
+    # Create DMatrix objects
+    dtrain = xgb.DMatrix(X_train, label=y_train)
+    dval   = xgb.DMatrix(X_val,   label=y_val)
+    # For stats predict on full set
+    dtest  = xgb.DMatrix(X, label=y)
+    y_test    = y
+    info_test = X_info
 
-# Compute scale_pos_weight
-if args.scale_pos_weight is not None:
-    scale_pos_weight = args.scale_pos_weight
+    # Compute scale_pos_weight
+    if args.scale_pos_weight is not None:
+        scale_pos_weight = args.scale_pos_weight
+    else:
+        scale_pos_weight = len(y_bkg) / max(len(y_signal), 1)
 else:
-    scale_pos_weight = len(y_bkg) / max(len(y_signal), 1)
+    # Validation DMatrix already built from the validation slice
+    dval = xgb.DMatrix(X_val, label=y_val)
+    del X_val  # free memory; dval is already constructed
+
 print("scale_pos_weight : ", scale_pos_weight)
 
 # XGBoost parameters
@@ -204,18 +290,54 @@ params = {
     'scale_pos_weight': scale_pos_weight
 }
 
-# Train with early stopping on validation set
-evals = [(dtrain, 'train'), (dval, 'val')]
-start=time.time()
-bst = xgb.train(
-    params,
-    dtrain,
-    num_boost_round=500,
-    evals=evals,
-    early_stopping_rounds=20,
-    verbose_eval=10
-)
-print("Time Taken for Training (s) : ", time.time()-start)
+# Train
+start = time.time()
+if args.batch_size is None:
+    # Train with early stopping on validation set
+    evals = [(dtrain, 'train'), (dval, 'val')]
+    bst = xgb.train(
+        params,
+        dtrain,
+        num_boost_round=500,
+        evals=evals,
+        early_stopping_rounds=20,
+        verbose_eval=10
+    )
+    print("Time Taken for Training (s) : ", time.time()-start)
+else:
+    n_train_batches = max(len(sig_train_ranges), len(bkg_train_ranges))
+    rounds_per_batch = max(1, 500 // n_train_batches)
+    print(f"Batched training: {n_train_batches} batches x {rounds_per_batch} rounds")
+
+    bst = None
+    for i in range(n_train_batches):
+        sig_r = sig_train_ranges[i % len(sig_train_ranges)]
+        bkg_r = bkg_train_ranges[i % len(bkg_train_ranges)]
+
+        X_s, _, _ = load_event_batch(args.signal_root, *sig_r, args.max_len, args.exclude_branches)
+        X_b, _, _ = load_event_batch(args.bkg_root,    *bkg_r, args.max_len, args.exclude_branches)
+        X_s[np.isinf(X_s)] = -5
+        X_b[np.isinf(X_b)] = -5
+
+        X_batch = np.vstack([X_s, X_b])
+        y_batch = np.concatenate([np.ones(len(X_s), dtype=int),
+                                   np.zeros(len(X_b), dtype=int)])
+        del X_s, X_b
+
+        dtrain_batch = xgb.DMatrix(X_batch, label=y_batch)
+        del X_batch
+
+        bst = xgb.train(
+            params,
+            dtrain_batch,
+            num_boost_round=rounds_per_batch,
+            evals=[(dtrain_batch, f'train_b{i}'), (dval, 'val')],
+            xgb_model=bst,
+            verbose_eval=False
+        )
+        print(f"Batch {i+1}/{n_train_batches} done.")
+
+    print("Time Taken for Training (s):", time.time() - start)
 
 # Save model for later inference
 bst.save_model('xgb_model_aframe_spacing5m_hex_DU_v2.json')
@@ -233,7 +355,45 @@ def apply_trigger(X, trigger_branch, feat_cols, max_len):
     return np.where(ndoms_pecut >= 3)
 
 # Evaluate on the test set
-y_pred_prob = bst.predict(dtest)
+if args.batch_size is None:
+    y_pred_prob = bst.predict(dtest)
+else:
+    # Full prediction ranges cover all requested events for each class
+    sig_all_ranges = make_batch_ranges(sig_first_rows, sig_last_row, args.batch_size)
+    bkg_all_ranges = make_batch_ranges(bkg_first_rows, bkg_last_row, args.batch_size)
+
+    trigger_col_idx = feat_cols.index('npe_50')
+
+    all_pred, all_y, all_info, all_trig = [], [], [], []
+
+    def _predict_loop(root_file, ranges, label_val):
+        for r in ranges:
+            X_b, info_b, _ = load_event_batch(
+                root_file, *r, args.max_len, args.exclude_branches)
+            X_b[np.isinf(X_b)] = -5
+            # Trigger mask computed while X_b is still in memory
+            ndoms = np.sum(
+                X_b[:, trigger_col_idx*args.max_len:(trigger_col_idx+1)*args.max_len] >= 3,
+                axis=1)
+            all_trig.append(ndoms >= 3)
+            all_pred.append(bst.predict(xgb.DMatrix(X_b)))
+            all_y.append(np.full(len(X_b), label_val, dtype=int))
+            all_info.append(info_b)
+            del X_b, info_b
+
+    _predict_loop(args.signal_root, sig_all_ranges, 1)
+    _predict_loop(args.bkg_root,    bkg_all_ranges, 0)
+
+    y_pred_prob  = np.concatenate(all_pred)
+    y_test       = np.concatenate(all_y)
+    info_test    = np.vstack(all_info)
+    trigger_mask = np.concatenate(all_trig)
+    del all_pred, all_y, all_info, all_trig
+
+    # Recompute efficiency corrections with all weights
+    signal_eff_corr = tot_signal / (info_test[:,0][y_test == 1]).sum()
+    bkg_eff_corr    = tot_bkg    / (info_test[:,0][y_test == 0]).sum()
+
 y_pred = (y_pred_prob >= 0.8).astype(int)
 
 # Print metrics
@@ -289,7 +449,10 @@ plt.colorbar(hist1[3], ax=ax1)
 plt.colorbar(hist2[3], ax=ax2)
 plt.savefig(outfolder+'bdt_energycorr.pdf')
 
-trigger_cut = apply_trigger(X, 'npe_50', feat_cols, args.max_len)
+if args.batch_size is None:
+    trigger_cut = apply_trigger(X, 'npe_50', feat_cols, args.max_len)
+else:
+    trigger_cut = np.where(trigger_mask)
 y_pred_prob = y_pred_prob[trigger_cut]
 info_test = info_test[trigger_cut]
 y_test = y_test[trigger_cut]
