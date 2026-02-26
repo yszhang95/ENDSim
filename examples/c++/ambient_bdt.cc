@@ -1,5 +1,9 @@
 #include <stdio.h>
 #include <iostream>
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
+#include <map>
 #include <vector>
 #include <algorithm>
 #include <numeric>
@@ -16,7 +20,7 @@ static const int NPMTS         = 2790;
 static const int NPMTS_PER_DOM = 31;
 static const int NDOMS         = NPMTS / NPMTS_PER_DOM;  // 90
 
-int ENDpmt2dom(int pmt_id) { return pmt_id / 31; }
+int ENDpmt2dom(int pmt_id) { return pmt_id / NPMTS_PER_DOM; }
 
 // Compact summary of one frame entry (one PMT's ambient hits in a time window)
 struct FrameData {
@@ -24,8 +28,32 @@ struct FrameData {
     float t_first; // earliest hit time relative to frame start (ns)
 };
 
+// Load DOM positions from a text file (dom_id dom_x dom_y dom_z per line).
+// Lines starting with '#' are treated as comments and skipped.
+std::map<int, std::tuple<float,float,float>> LoadDomPositions(const std::string& path)
+{
+    std::map<int, std::tuple<float,float,float>> m;
+    std::ifstream ifs(path);
+    if (!ifs.is_open()) {
+        std::cerr << "Cannot open DOM positions file: " << path << std::endl;
+        exit(1);
+    }
+    std::string line;
+    while (std::getline(ifs, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream ss(line);
+        int   id;
+        float x, y, z;
+        if (ss >> id >> x >> y >> z)
+            m[id] = std::make_tuple(x, y, z);
+    }
+    std::cout << "Loaded " << m.size() << " DOM positions from " << path << std::endl;
+    return m;
+}
+
 void process(const std::string& infilename,
              const std::string& outfilename,
+             const std::string& domposfile,
              int M,
              unsigned int seed)
 {
@@ -74,8 +102,13 @@ void process(const std::string& infilename,
     fin->Close();
 
     // ------------------------------------------------------------------
+    // Load DOM geometry database
+    // ------------------------------------------------------------------
+    auto dompos = LoadDomPositions(domposfile);
+
+    // ------------------------------------------------------------------
     // Set up output tree (same branch structure as pmt_bdt.cc doms tree,
-    // minus muon-truth branches; dom_x/y/z set to 0)
+    // minus muon-truth branches)
     // ------------------------------------------------------------------
     TFile* fout = new TFile(outfilename.c_str(), "recreate");
     TTree* tout = new TTree("doms", "doms");
@@ -106,11 +139,6 @@ void process(const std::string& infilename,
     tout->Branch("npe_50",     &npe_50,     "npe_50/I");
     tout->Branch("npmts_100",  &npmts_100,  "npmts_100/I");
     tout->Branch("npe_100",    &npe_100,    "npe_100/I");
-
-    // DOM positions are unavailable without geometry — set to zero
-    dom_x = 0.f;
-    dom_y = 0.f;
-    dom_z = 0.f;
 
     // ------------------------------------------------------------------
     // M-iteration loop
@@ -146,6 +174,16 @@ void process(const std::string& infilename,
 
             dom_id = d;
             du_id  = d / 18;
+
+            // Look up DOM position from geometry database
+            auto it = dompos.find(d);
+            if (it == dompos.end()) {
+                std::cerr << "DOM id " << d << " not found in geometry database" << std::endl;
+                throw std::runtime_error("Missing DOM position for dom_id " + std::to_string(d));
+            }
+            dom_x = std::get<0>(it->second);
+            dom_y = std::get<1>(it->second);
+            dom_z = std::get<2>(it->second);
 
             npmts     = (int)dom_pes[d].size();
             npmts_50  = 0;
@@ -214,21 +252,23 @@ void process(const std::string& infilename,
 
 
 int main(int argc, char* argv[]) {
-    if (argc < 4 || argc > 5) {
+    if (argc < 5 || argc > 6) {
         std::cout << "Usage: " << argv[0]
-                  << " <input_root> <output_root> <M> [seed]" << std::endl;
-        std::cout << "  input_root  : path to output_ambient_light_10us.root" << std::endl;
-        std::cout << "  output_root : output file path" << std::endl;
-        std::cout << "  M           : number of sampling iterations" << std::endl;
-        std::cout << "  seed        : optional TRandom3 seed (default: 0 = time-based)" << std::endl;
+                  << " <input_root> <output_root> <dom_positions> <M> [seed]" << std::endl;
+        std::cout << "  input_root    : path to output_ambient_light_10us.root" << std::endl;
+        std::cout << "  output_root   : output file path" << std::endl;
+        std::cout << "  dom_positions : text file with DOM positions (dom_id x y z)" << std::endl;
+        std::cout << "  M             : number of sampling iterations" << std::endl;
+        std::cout << "  seed          : optional TRandom3 seed (default: 0 = time-based)" << std::endl;
         return 1;
     }
 
     std::string infilename(argv[1]);
     std::string outfilename(argv[2]);
-    int M = atoi(argv[3]);
-    unsigned int seed = (argc == 5) ? (unsigned int)atoi(argv[4]) : 0;
+    std::string domposfile(argv[3]);
+    int M = atoi(argv[4]);
+    unsigned int seed = (argc == 6) ? (unsigned int)atoi(argv[5]) : 0;
 
-    process(infilename, outfilename, M, seed);
+    process(infilename, outfilename, domposfile, M, seed);
     return 0;
 }
