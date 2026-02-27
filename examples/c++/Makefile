@@ -6,7 +6,7 @@ ROOTCPPFLAGS=-g -I$(ROOTSYS)/include -std=c++17
 ROOTLDFLAGS=-g -L$(ROOTSYS)/lib
 ROOTLDLIBS=`root-config --libs --cflags`
 
-all: pmt_ntuple pmt_ana pmt_event pmt_bdt ambient_bdt
+all: pmt_ntuple pmt_ana pmt_event pmt_bdt ambient_bdt mixed_bdt
 
 timing_ntuple: timing_ntuple.cc
 	$(CXX) $(LDFLAGS) -o timing_ntuple timing_ntuple.cc $(CPPFLAGS) $(LDLIBS)
@@ -25,6 +25,9 @@ pmt_bdt: pmt_bdt.cc
 
 ambient_bdt: ambient_bdt.cc
 	$(CXX) $(ROOTLDFLAGS) -o ambient_bdt ambient_bdt.cc $(ROOTCPPFLAGS) $(ROOTLDLIBS)
+
+mixed_bdt: mixed_bdt.cc
+	$(CXX) $(LDFLAGS) -o mixed_bdt mixed_bdt.cc $(CPPFLAGS) -I"/ratpac-setup/local/include/Geant4" $(LDLIBS)
 
 # pmt_bdt2: pmt_bdt2.cc
 # 	$(CXX) $(LDFLAGS) -o pmt_bdt2 pmt_bdt2.cc $(CPPFLAGS) -I"/ratpac-setup/local/include/Geant4" $(LDLIBS)
