@@ -28,6 +28,7 @@
 #include <TMath.h>
 
 #include <glob.h>
+#include "clustering.h"
 
 using namespace std;
 
@@ -248,7 +249,7 @@ void process(const std::string& signal_pattern,
         event_id = (int)iev;
 
         // Random global time offset for this event (ns)
-        float toffset = (float)rng.Uniform(-10000., 40000.);
+        float toffset = (float)rng.Uniform(0., 50000.);
 
         // ------------------------------------------------------------------
         // Collect signal PMT hits (type==1 only, with toffset applied)
@@ -348,13 +349,45 @@ void process(const std::string& signal_pattern,
             npe_50    = 0;
             npe_100   = 0;
 
+            // Sort both pe and time independently (preserves current behavior)
             std::sort(dom_pe.begin(),   dom_pe.end());
             std::sort(dom_time.begin(), dom_time.end());
 
-            float init_time = dom_time.at(0);
-            for (int i = 0; i < (int)dom_time.size(); i++) {
-                float pmt_time = dom_time.at(i);
-                int   pmt_pe   = dom_pe.at(i);
+            // Find densest temporal cluster using 1D DBSCAN
+            std::vector<int> cluster_indices = find_densest_time_cluster(dom_time, 50.0f, 2);
+
+            // Extract cluster times and PEs
+            std::vector<float> cluster_times;
+            std::vector<int>   cluster_pes;
+            for (int idx : cluster_indices) {
+                cluster_times.push_back(dom_time[idx]);
+                cluster_pes.push_back(dom_pe[idx]);
+            }
+
+            // Compute statistics on densest cluster only
+            npe      = std::accumulate(cluster_pes.begin(),   cluster_pes.end(),   0);
+            t_mean   = std::accumulate(cluster_times.begin(), cluster_times.end(), 0.f) / cluster_times.size();
+            pe_mean  = (float)npe / cluster_pes.size();
+            pe_min   = *std::min_element(cluster_pes.begin(),   cluster_pes.end());
+            pe_max   = *std::max_element(cluster_pes.begin(),   cluster_pes.end());
+            pe_spread = pe_max - pe_min;
+            t_spread  = cluster_times.back() - cluster_times.front();
+            t_min     = cluster_times.front();
+
+            pe_rms = 0.f;
+            t_rms  = 0.f;
+            for (size_t i = 0; i < cluster_pes.size(); i++) {
+                pe_rms += (float)TMath::Power(cluster_pes[i]   - pe_mean, 2);
+                t_rms  += (float)TMath::Power(cluster_times[i] - t_mean,  2);
+            }
+            pe_rms = TMath::Sqrt(pe_rms) / cluster_pes.size();
+            t_rms  = TMath::Sqrt(t_rms)  / cluster_times.size();
+
+            // Compute npmts_50/100 relative to cluster start time
+            float init_time = cluster_times.front();
+            for (size_t i = 0; i < cluster_times.size(); i++) {
+                float pmt_time = cluster_times[i];
+                int   pmt_pe   = cluster_pes[i];
                 if (pmt_time - init_time <= 50) {
                     npmts_50  += 1;
                     npe_50    += pmt_pe;
@@ -373,24 +406,6 @@ void process(const std::string& signal_pattern,
                 }
                 init_time = pmt_time;
             }
-
-            npe      = std::accumulate(dom_pe.begin(),   dom_pe.end(),   0);
-            t_mean   = std::accumulate(dom_time.begin(), dom_time.end(), 0.f) / dom_time.size();
-            pe_mean  = (float)npe / dom_pe.size();
-            pe_min   = dom_pe.at(0);
-            pe_max   = dom_pe.at(dom_pe.size() - 1);
-            pe_spread = pe_max - pe_min;
-            t_spread  = dom_time.at(dom_time.size() - 1) - dom_time.at(0);
-            t_min     = dom_time.at(0);
-
-            pe_rms = 0.f;
-            t_rms  = 0.f;
-            for (int i = 0; i < (int)dom_pe.size(); i++) {
-                pe_rms += (float)TMath::Power(dom_pe[i]   - pe_mean, 2);
-                t_rms  += (float)TMath::Power(dom_time[i] - t_mean,  2);
-            }
-            pe_rms = TMath::Sqrt(pe_rms) / dom_pe.size();
-            t_rms  = TMath::Sqrt(t_rms)  / dom_time.size();
 
             tout->Fill();
         }

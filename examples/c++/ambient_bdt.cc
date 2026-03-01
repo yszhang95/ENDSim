@@ -14,6 +14,8 @@
 #include <TRandom3.h>
 #include <TMath.h>
 
+#include "clustering.h"
+
 using namespace std;
 
 static const int NPMTS         = 2790;
@@ -143,7 +145,7 @@ void process(const std::string& infilename,
     tout->Branch("pe_spread",  &pe_spread,  "pe_spread/I");
     tout->Branch("pe_rms",     &pe_rms,     "pe_rms/F");
     tout->Branch("t_min",      &t_min,      "t_min/F");
-    // tout->Branch("t_spread",   &t_spread,   "t_spread/F");
+    tout->Branch("t_spread",   &t_spread,   "t_spread/F");
     tout->Branch("t_mean",     &t_mean,     "t_mean/F");
     tout->Branch("t_rms",      &t_rms,      "t_rms/F");
     tout->Branch("npmts_50",   &npmts_50,   "npmts_50/I");
@@ -214,10 +216,41 @@ void process(const std::string& infilename,
             sort(dom_pe.begin(),   dom_pe.end());
             sort(dom_time.begin(), dom_time.end());
 
-            float init_time = dom_time.at(0);
-            for (int i = 0; i < (int)dom_time.size(); i++) {
-                float pmt_time = dom_time.at(i);
-                int   pmt_pe   = dom_pe.at(i);
+            // Find densest temporal cluster using 1D DBSCAN
+            std::vector<int> cluster_indices = find_densest_time_cluster(dom_time, 50.0f, 2);
+
+            // Extract cluster times and PEs
+            std::vector<float> cluster_times;
+            std::vector<int>   cluster_pes;
+            for (int idx : cluster_indices) {
+                cluster_times.push_back(dom_time[idx]);
+                cluster_pes.push_back(dom_pe[idx]);
+            }
+
+            // Compute statistics on densest cluster only
+            npe      = accumulate(cluster_pes.begin(),   cluster_pes.end(),   0);
+            t_mean   = accumulate(cluster_times.begin(), cluster_times.end(), 0.f) / cluster_times.size();
+            pe_mean  = (float)npe / cluster_pes.size();
+            pe_min   = *min_element(cluster_pes.begin(),   cluster_pes.end());
+            pe_max   = *max_element(cluster_pes.begin(),   cluster_pes.end());
+            pe_spread = pe_max - pe_min;
+            t_spread  = cluster_times.back() - cluster_times.front();
+            t_min     = cluster_times.front();
+
+            pe_rms = 0.f;
+            t_rms  = 0.f;
+            for (size_t i = 0; i < cluster_pes.size(); i++) {
+                pe_rms += (float)TMath::Power(cluster_pes[i]   - pe_mean, 2);
+                t_rms  += (float)TMath::Power(cluster_times[i] - t_mean,  2);
+            }
+            pe_rms = TMath::Sqrt(pe_rms) / cluster_pes.size();
+            t_rms  = TMath::Sqrt(t_rms)  / cluster_times.size();
+
+            // Compute npmts_50/100 relative to cluster start time
+            float init_time = cluster_times.front();
+            for (size_t i = 0; i < cluster_times.size(); i++) {
+                float pmt_time = cluster_times[i];
+                int   pmt_pe   = cluster_pes[i];
                 if (pmt_time - init_time <= 50) {
                     npmts_50  += 1;
                     npe_50    += pmt_pe;
@@ -236,24 +269,6 @@ void process(const std::string& infilename,
                 }
                 init_time = pmt_time;
             }
-
-            npe      = accumulate(dom_pe.begin(),   dom_pe.end(),   0);
-            t_mean   = accumulate(dom_time.begin(), dom_time.end(), 0.f) / dom_time.size();
-            pe_mean  = (float)npe / dom_pe.size();
-            pe_min   = dom_pe.at(0);
-            pe_max   = dom_pe.at(dom_pe.size() - 1);
-            pe_spread = pe_max - pe_min;
-            t_spread  = dom_time.at(dom_time.size() - 1) - dom_time.at(0);
-            t_min     = dom_time.at(0);
-
-            pe_rms = 0.f;
-            t_rms  = 0.f;
-            for (int i = 0; i < (int)dom_pe.size(); i++) {
-                pe_rms += (float)TMath::Power(dom_pe[i]   - pe_mean, 2);
-                t_rms  += (float)TMath::Power(dom_time[i] - t_mean,  2);
-            }
-            pe_rms = TMath::Sqrt(pe_rms) / dom_pe.size();
-            t_rms  = TMath::Sqrt(t_rms)  / dom_time.size();
 
             tout->Fill();
         }
