@@ -54,9 +54,9 @@ parser.add_argument('--signal_root', required=True,
                     help='Path to signal ROOT file (output of pmt_bdt.cc)')
 parser.add_argument('--bkg_root', required=True,
                     help='Path to background ROOT file (output of pmt_bdt.cc)')
-parser.add_argument('--n_signal', type=int, required=True,
+parser.add_argument('--n_signal', type=int, required=True, default=0,
                     help='Max number of signal events to load')
-parser.add_argument('--n_bkg', type=int, required=True,
+parser.add_argument('--n_bkg', type=int, required=True, default=0,
                     help='Max number of background events to load')
 parser.add_argument('--scale_pos_weight', type=float, default=None,
                     help='XGBoost scale_pos_weight (default: n_bkg/n_signal)')
@@ -144,8 +144,11 @@ def stream_events_from_root(root_file, max_events, max_len=88, exclude_branches=
     """
     first_rows, total_rows = get_event_row_boundaries(root_file)
     n = min(max_events, len(first_rows))
+    if n <= 0:
+        n = len(first_rows)
     row_end = int(first_rows[n]) if n < len(first_rows) else total_rows
     X, info, feat_cols = load_event_batch(root_file, 0, row_end, max_len, exclude_branches)
+    print('Feature columns:', feat_cols)
     if len(X) < max_events:
         print(f"Warning: only {len(X)} events found (requested {max_events}).")
     print(f"Loaded {len(X)} events from {root_file} "
@@ -173,8 +176,10 @@ norm_signal = osc_factor*pot_perDay/pot
 # norm_bkg = 86400*spill_rate*spill_length/livetime
 
 # FIXME: I use the slot for cosmic to represent ambient light
-# FIXME: ambient light is 30 ms / 30us = 1000 times more than beam rate
-norm_bkg = 1000*norm_signal/osc_factor
+# FIXME: ambient light is 50 ms / 50us = 1000 times more than beam rate
+# norm_bkg = 1000*norm_signal/osc_factor
+# norm_bkg = 1000*norm_signal/osc_factor
+norm_bkg = 2000*norm_signal/osc_factor
 
 print("Normalization Factors : ", norm_signal, norm_bkg)
 
@@ -207,6 +212,10 @@ else:
     bkg_first_rows, bkg_total_rows = get_event_row_boundaries(args.bkg_root)
 
     # Limit to requested event count; compute the exclusive end row carefully
+    if args.n_signal == 0:
+        args.n_signal = len(sig_first_rows)
+    if args.n_bkg == 0:
+        args.n_bkg = len(bkg_first_rows)
     n_sig = min(args.n_signal, len(sig_first_rows))
     n_bkg = min(args.n_bkg,    len(bkg_first_rows))
     sig_last_row = (int(sig_first_rows[n_sig]) if n_sig < len(sig_first_rows) else sig_total_rows)
@@ -494,6 +503,9 @@ plt.yscale('log')
 plt.legend()
 plt.grid(True)
 plt.savefig(outfolder+'prob_hist.pdf')
+print('min/max score for signal: ', signal_probs.min(), signal_probs.max())
+print('min/max score for bkg: ', bg_probs.min(), bg_probs.max())
+np.savez("prob_array.npz", bg_probs=bg_probs, signal_probs=signal_probs)
 
 #  # get an idea of s/n over fiducial volume
 #  y_cut = 4.0 #m
