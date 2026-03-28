@@ -267,3 +267,12 @@ __marimo__/
 
 # debug information files
 *.dwo
+
+
+# Project specific binaries
+ambient_bdt
+pmt_ana
+pmt_bdt
+pmt_event
+pmt_ntuple
+mixed_bdt
